@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Rider, Order, AssignmentLogItem } from '../types';
 import { Navbar } from '../components/Navbar';
 import { DispatchMap } from '../components/DispatchMap';
@@ -34,84 +34,46 @@ export default function Home() {
   const [logs, setLogs] = useState<AssignmentLogItem[]>([]);
   const [isOptimizing, setIsOptimizing] = useState<boolean>(false);
 
-  // Approximate Haversine distance in KM between two coordinates
-  const calcDistanceKm = (lat1: number, lon1: number, lat2: number, lon2: number) => {
-    const dLat = (lat2 - lat1) * 111;
-    const dLon = (lon2 - lon1) * 85; // approx at 37 N latitude
-    return Math.sqrt(dLat * dLat + dLon * dLon);
+  const fetchData = async () => {
+    try {
+      const [ridersRes, ordersRes, logsRes] = await Promise.all([
+        fetch('http://localhost:8080/api/v1/data/riders'),
+        fetch('http://localhost:8080/api/v1/data/orders'),
+        fetch('http://localhost:8080/api/v1/data/logs')
+      ]);
+      if (ridersRes.ok) setRiders(await ridersRes.json());
+      if (ordersRes.ok) setOrders(await ordersRes.json());
+      if (logsRes.ok) setLogs(await logsRes.json());
+    } catch (error) {
+      console.error('Failed to fetch data from backend', error);
+      // Fallback to initial data if backend is down
+    }
   };
 
-  const handleRunOptimization = (w1: number, w2: number) => {
+  useEffect(() => {
+    fetchData();
+  }, []);
+
+  const handleRunOptimization = async (w1: number, w2: number) => {
     setIsOptimizing(true);
-
-    // Simulate OR-Tools constraint solver latency
-    setTimeout(() => {
-      const currentRiders = [...riders];
-      const currentOrders = [...orders];
-      const newLogs: AssignmentLogItem[] = [];
-
-      const totalEarnings = currentRiders.reduce((sum, r) => sum + r.dailyEarnings, 0);
-      const avgEarnings = totalEarnings / (currentRiders.length || 1);
-
-      // Process each pending order
-      currentOrders.forEach((order) => {
-        if (order.status !== 'PENDING') return;
-
-        // Find available riders
-        const availableRiders = currentRiders.filter((r) => r.status === 'ACTIVE');
-        if (availableRiders.length === 0) return;
-
-        let bestRider: Rider | null = null;
-        let minCost = Infinity;
-        let bestDist = 0;
-        let bestPenalty = 0;
-
-        availableRiders.forEach((rider) => {
-          const distKm = calcDistanceKm(rider.lat, rider.lon, order.pickupLat, order.pickupLon);
-          const distanceScore = distKm * w1;
-
-          // Fairness Penalty: If rider is above average, penalize them heavily based on w2
-          const earningsDiff = rider.dailyEarnings - avgEarnings;
-          const fairnessPenalty = earningsDiff > 0 ? (earningsDiff / 10) * w2 : 0;
-
-          const totalCost = distanceScore + fairnessPenalty;
-
-          if (totalCost < minCost) {
-            minCost = totalCost;
-            bestRider = rider;
-            bestDist = distKm;
-            bestPenalty = fairnessPenalty;
-          }
-        });
-
-        if (bestRider) {
-          const assignedRider = bestRider as Rider;
-          order.status = 'ASSIGNED';
-          order.assignedRiderId = assignedRider.id;
-          assignedRider.status = 'BUSY';
-          assignedRider.dailyEarnings += order.payout;
-
-          newLogs.push({
-            id: `LOG-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
-            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
-            orderId: order.id,
-            riderId: `${assignedRider.id} (${assignedRider.name})`,
-            distanceKm: parseFloat(bestDist.toFixed(1)),
-            distanceScore: parseFloat((bestDist * w1).toFixed(2)),
-            fairnessPenalty: parseFloat(bestPenalty.toFixed(2)),
-            totalCost: parseFloat(minCost.toFixed(2)),
-          });
-        }
+    try {
+      const response = await fetch('http://localhost:8080/api/v1/optimization/run', {
+        method: 'POST',
       });
-
-      setRiders(currentRiders);
-      setOrders(currentOrders);
-      setLogs((prev) => [...newLogs, ...prev]);
+      if (response.ok) {
+        // Refresh data after optimization
+        await fetchData();
+      }
+    } catch (error) {
+      console.error('Optimization failed', error);
+    } finally {
       setIsOptimizing(false);
-    }, 650);
+    }
   };
 
   const handleResetSimulation = () => {
+    // In a real app, this would reset the backend DB.
+    // For now, we just reset the UI to initial static mock data.
     setRiders(INITIAL_RIDERS.map((r) => ({ ...r })));
     setOrders(INITIAL_ORDERS.map((o) => ({ ...o })));
     setLogs([]);
