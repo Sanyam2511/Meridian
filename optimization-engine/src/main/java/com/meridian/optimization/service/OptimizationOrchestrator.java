@@ -1,31 +1,46 @@
 package com.meridian.optimization.service;
 
+import com.meridian.optimization.dto.Assignment;
 import com.meridian.optimization.dto.SolverResult;
+import com.meridian.optimization.entity.AssignmentLog;
 import com.meridian.optimization.entity.Order;
 import com.meridian.optimization.entity.OrderStatus;
 import com.meridian.optimization.entity.Rider;
 import com.meridian.optimization.entity.RiderStatus;
+import com.meridian.optimization.repository.AssignmentLogRepository;
 import com.meridian.optimization.repository.OrderRepository;
 import com.meridian.optimization.repository.RiderRepository;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.List;
+import java.util.Map;
 
 @Service
 public class OptimizationOrchestrator {
 
     private final RiderRepository riderRepository;
     private final OrderRepository orderRepository;
+    private final AssignmentLogRepository assignmentLogRepository;
     private final VrpSolverService vrpSolverService;
+    private final ObjectMapper objectMapper;
 
-    public OptimizationOrchestrator(RiderRepository riderRepository, OrderRepository orderRepository, VrpSolverService vrpSolverService) {
+    public OptimizationOrchestrator(RiderRepository riderRepository,
+                                    OrderRepository orderRepository,
+                                    AssignmentLogRepository assignmentLogRepository,
+                                    VrpSolverService vrpSolverService,
+                                    ObjectMapper objectMapper) {
         this.riderRepository = riderRepository;
         this.orderRepository = orderRepository;
+        this.assignmentLogRepository = assignmentLogRepository;
         this.vrpSolverService = vrpSolverService;
+        this.objectMapper = objectMapper;
     }
 
+    @Transactional
     public SolverResult runOptimizationCycle() {
         // Fetch eligible riders and orders
         List<Rider> activeRiders = riderRepository.findByCurrentStatus(RiderStatus.ACTIVE);
@@ -43,6 +58,43 @@ public class OptimizationOrchestrator {
         BigDecimal averageEarnings = totalEarnings.divide(new BigDecimal(activeRiders.size()), 2, RoundingMode.HALF_UP);
 
         // Run the solver
-        return vrpSolverService.solveAssignments(activeRiders, pendingOrders, averageEarnings);
+        SolverResult result = vrpSolverService.solveAssignments(activeRiders, pendingOrders, averageEarnings);
+
+        // Persist assignments
+        for (Assignment assignment : result.getAssignments()) {
+            Rider rider = riderRepository.findById(assignment.getRiderId()).orElse(null);
+            Order order = orderRepository.findById(assignment.getOrderId()).orElse(null);
+
+            if (rider != null && order != null) {
+                // Update Order status
+                order.setStatus(OrderStatus.ASSIGNED);
+                orderRepository.save(order);
+
+                // Update Rider earnings and status
+                rider.setCurrentStatus(RiderStatus.BUSY);
+                rider.setDailyEarningsBalance(rider.getDailyEarningsBalance().add(order.getPayoutAmount()));
+                riderRepository.save(rider);
+
+                // Create Assignment Log
+                try {
+                    String reasonJson = objectMapper.writeValueAsString(Map.of(
+                            "distanceScore", assignment.getDistanceScore(),
+                            "fairnessPenalty", assignment.getFairnessPenalty(),
+                            "totalCost", assignment.getTotalCost()
+                    ));
+
+                    AssignmentLog log = new AssignmentLog();
+                    log.setRider(rider);
+                    log.setOrder(order);
+                    log.setAssignmentReason(reasonJson);
+                    assignmentLogRepository.save(log);
+                } catch (Exception e) {
+                    // Ignore JSON serialization errors for now
+                    e.printStackTrace();
+                }
+            }
+        }
+
+        return result;
     }
 }
