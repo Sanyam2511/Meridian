@@ -17,6 +17,8 @@ export const createAppServer = () => {
 
   // Keep track of which socket belongs to which rider for cleanup on disconnect
   const socketToRiderMap = new Map<string, string>();
+  // Reverse lookup to find a rider's socket for push notifications
+  const riderToSocketMap = new Map<string, string>();
 
   io.on('connection', (socket: Socket) => {
     console.log(`[Gateway] New socket connected: ${socket.id}`);
@@ -31,6 +33,7 @@ export const createAppServer = () => {
 
         await geoService.updateRiderLocation(riderId, lat, lon);
         socketToRiderMap.set(socket.id, riderId);
+        riderToSocketMap.set(riderId, socket.id);
         socket.emit('rider:ping:ack', { status: 'OK', timestamp: Date.now() });
       } catch (err: any) {
         console.error(`[Gateway] Error updating location for socket ${socket.id}:`, err);
@@ -45,6 +48,7 @@ export const createAppServer = () => {
         try {
           await geoService.removeRiderLocation(riderId);
           socketToRiderMap.delete(socket.id);
+          riderToSocketMap.delete(riderId);
           console.log(`[Gateway] Removed rider ${riderId} from hot state layer.`);
         } catch (err) {
           console.error(`[Gateway] Failed to remove rider location on disconnect:`, err);
@@ -71,6 +75,23 @@ export const createAppServer = () => {
       return res.status(500).json({ error: 'Internal server error' });
     }
   });
+  // REST endpoint for the Java Optimization Engine to push assignment notifications
+  app.post('/api/v1/notifications/assignment', (req: Request, res: Response) => {
+    const { riderId, orderId, payout, pickupLat, pickupLon } = req.body;
+    
+    if (!riderId || !orderId) {
+      return res.status(400).json({ error: 'riderId and orderId are required' });
+    }
 
+    const socketId = riderToSocketMap.get(riderId);
+    if (socketId) {
+      io.to(socketId).emit('order:assigned', { orderId, payout, pickupLat, pickupLon, timestamp: Date.now() });
+      console.log(`[Gateway] Pushed assignment ${orderId} to rider ${riderId} on socket ${socketId}`);
+      return res.json({ success: true, delivered: true });
+    } else {
+      console.log(`[Gateway] Rider ${riderId} is not connected. Assignment ${orderId} missed push.`);
+      return res.json({ success: true, delivered: false });
+    }
+  });
   return { app, server, io };
 };
