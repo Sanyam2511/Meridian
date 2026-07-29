@@ -59,7 +59,9 @@ class VrpSolverServiceTest {
         SolverResult result = vrpSolverService.solveAssignments(
                 List.of(closeRider, underEarningRider),
                 List.of(order),
-                avgEarnings
+                avgEarnings,
+                null, // w1
+                null  // w2
         );
 
         assertTrue(result.isSuccessful());

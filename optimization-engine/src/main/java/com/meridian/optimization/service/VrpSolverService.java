@@ -34,7 +34,7 @@ public class VrpSolverService {
      * Solves the VRP to assign the given orders to the available riders.
      * Uses Euclidean distance for the distance score and the difference between average earnings and rider earnings for the fairness penalty.
      */
-    public SolverResult solveAssignments(List<Rider> riders, List<Order> orders, BigDecimal averageFleetEarnings) {
+    public SolverResult solveAssignments(List<Rider> riders, List<Order> orders, BigDecimal averageFleetEarnings, Double dynamicW1, Double dynamicW2) {
         long startTime = System.currentTimeMillis();
 
         if (riders.isEmpty() || orders.isEmpty()) {
@@ -74,8 +74,12 @@ public class VrpSolverService {
                 double dy = rider.getLastKnownLocation().getY() - order.getPickupLocation().getY();
                 double distanceScore = Math.sqrt(dx * dx + dy * dy);
 
+                // Use dynamic weights if provided, otherwise default to configured weights
+                double currentW1 = (dynamicW1 != null) ? dynamicW1 : weightDistance;
+                double currentW2 = (dynamicW2 != null) ? dynamicW2 : weightFairness;
+
                 // Total Cost = (w1 * DistanceScore) + (w2 * FairnessPenalty)
-                double totalCost = (weightDistance * distanceScore) + (weightFairness * fairnessPenalty);
+                double totalCost = (currentW1 * distanceScore) + (currentW2 * fairnessPenalty);
                 
                 // Ensure cost is non-negative for the solver (shift if necessary)
                 // For a real app we'd handle negative costs carefully, but for this basic VRP we floor at 0.
@@ -144,7 +148,9 @@ public class VrpSolverService {
                         double dy = assignedRider.getLastKnownLocation().getY() - assignedOrder.getPickupLocation().getY();
                         double dist = Math.sqrt(dx * dx + dy * dy);
                         double fair = assignedRider.getDailyEarningsBalance().doubleValue() - averageFleetEarnings.doubleValue();
-                        double tot = (weightDistance * dist) + (weightFairness * fair);
+                        double currentW1 = (dynamicW1 != null) ? dynamicW1 : weightDistance;
+                        double currentW2 = (dynamicW2 != null) ? dynamicW2 : weightFairness;
+                        double tot = (currentW1 * dist) + (currentW2 * fair);
 
                         assignments.add(new Assignment(
                                 assignedRider.getId(),

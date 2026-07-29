@@ -11,7 +11,9 @@ import com.meridian.optimization.repository.AssignmentLogRepository;
 import com.meridian.optimization.repository.OrderRepository;
 import com.meridian.optimization.repository.RiderRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
+import org.springframework.web.client.RestTemplate;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
@@ -27,21 +29,24 @@ public class OptimizationOrchestrator {
     private final AssignmentLogRepository assignmentLogRepository;
     private final VrpSolverService vrpSolverService;
     private final ObjectMapper objectMapper;
+    private final RestTemplate restTemplate;
 
     public OptimizationOrchestrator(RiderRepository riderRepository,
                                     OrderRepository orderRepository,
                                     AssignmentLogRepository assignmentLogRepository,
                                     VrpSolverService vrpSolverService,
-                                    ObjectMapper objectMapper) {
+                                    ObjectMapper objectMapper,
+                                    RestTemplate restTemplate) {
         this.riderRepository = riderRepository;
         this.orderRepository = orderRepository;
         this.assignmentLogRepository = assignmentLogRepository;
         this.vrpSolverService = vrpSolverService;
         this.objectMapper = objectMapper;
+        this.restTemplate = restTemplate;
     }
 
     @Transactional
-    public SolverResult runOptimizationCycle() {
+    public SolverResult runOptimizationCycle(Double w1, Double w2) {
         // Fetch eligible riders and orders
         List<Rider> activeRiders = riderRepository.findByCurrentStatus(RiderStatus.ACTIVE);
         List<Order> pendingOrders = orderRepository.findByStatus(OrderStatus.PENDING);
@@ -58,7 +63,7 @@ public class OptimizationOrchestrator {
         BigDecimal averageEarnings = totalEarnings.divide(new BigDecimal(activeRiders.size()), 2, RoundingMode.HALF_UP);
 
         // Run the solver
-        SolverResult result = vrpSolverService.solveAssignments(activeRiders, pendingOrders, averageEarnings);
+        SolverResult result = vrpSolverService.solveAssignments(activeRiders, pendingOrders, averageEarnings, w1, w2);
 
         // Persist assignments
         for (Assignment assignment : result.getAssignments()) {
@@ -88,6 +93,20 @@ public class OptimizationOrchestrator {
                     log.setOrder(order);
                     log.setAssignmentReason(reasonJson);
                     assignmentLogRepository.save(log);
+
+                    // Push notification to Node.js Gateway
+                    try {
+                        Map<String, Object> payload = Map.of(
+                                "riderId", rider.getId().toString(),
+                                "orderId", order.getId().toString(),
+                                "payout", order.getPayoutAmount(),
+                                "pickupLat", order.getPickupLocation().getY(),
+                                "pickupLon", order.getPickupLocation().getX()
+                        );
+                        restTemplate.postForEntity("http://localhost:3000/api/v1/notifications/assignment", payload, String.class);
+                    } catch (Exception ex) {
+                        System.err.println("Failed to push assignment notification to gateway: " + ex.getMessage());
+                    }
                 } catch (Exception e) {
                     // Ignore JSON serialization errors for now
                     e.printStackTrace();

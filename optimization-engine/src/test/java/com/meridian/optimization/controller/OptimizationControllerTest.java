@@ -19,12 +19,12 @@ class OptimizationControllerTest {
         // Arrange
         OptimizationOrchestrator mockOrchestrator = Mockito.mock(OptimizationOrchestrator.class);
         SolverResult mockResult = new SolverResult(Collections.emptyList(), 10, true);
-        when(mockOrchestrator.runOptimizationCycle()).thenReturn(mockResult);
+        when(mockOrchestrator.runOptimizationCycle(null, null)).thenReturn(mockResult);
 
         OptimizationController controller = new OptimizationController(mockOrchestrator);
 
         // Act
-        ResponseEntity<SolverResult> response = controller.runOptimization();
+        ResponseEntity<SolverResult> response = controller.runOptimization(null);
 
         // Assert
         assertEquals(200, response.getStatusCode().value());
