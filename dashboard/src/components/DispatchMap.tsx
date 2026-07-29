@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Rider, Order } from '../types';
-import { Bike, Navigation2, Package, MapPin, DollarSign, AlertCircle, CheckCircle2 } from 'lucide-react';
+import { Bike, Navigation2, Package, DollarSign, AlertCircle, CheckCircle2 } from 'lucide-react';
 
 interface DispatchMapProps {
   riders: Rider[];

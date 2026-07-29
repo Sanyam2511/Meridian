@@ -51,6 +51,7 @@ export default function Home() {
   };
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchData();
   }, []);
 
@@ -59,6 +60,13 @@ export default function Home() {
     try {
       const response = await fetch('http://localhost:8080/api/v1/optimization/run', {
         method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          weightDistance: w1,
+          weightFairness: w2
+        }),
       });
       if (response.ok) {
         // Refresh data after optimization
