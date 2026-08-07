@@ -38,10 +38,26 @@ export class RedisGeoMock {
     return results.map((r) => r.member);
   }
 
+  async geopos(key: string, ...members: string[]): Promise<Array<[string, string] | null>> {
+    const store = this.getStore(key);
+    return members.map((member) => {
+      const coords = store.get(member);
+      if (!coords) return null;
+      // return [lon, lat] as strings
+      return [coords.lon.toString(), coords.lat.toString()];
+    });
+  }
+
   async zrem(key: string, member: string): Promise<number> {
     const store = this.getStore(key);
     const existed = store.has(member);
     store.delete(member);
+    return existed ? 1 : 0;
+  }
+
+  async del(key: string): Promise<number> {
+    const existed = this.geoStores.has(key);
+    this.geoStores.delete(key);
     return existed ? 1 : 0;
   }
 

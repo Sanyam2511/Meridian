@@ -75,6 +75,48 @@ export const createAppServer = () => {
       return res.status(500).json({ error: 'Internal server error' });
     }
   });
+
+  // REST endpoint to query nearby riders WITH coordinates
+  app.get('/api/v1/riders/nearby-active', async (req: Request, res: Response) => {
+    try {
+      const lat = parseFloat(req.query.lat as string);
+      const lon = parseFloat(req.query.lon as string);
+      const radiusKm = parseFloat(req.query.radius as string) || 25.0;
+
+      if (isNaN(lat) || isNaN(lon)) {
+        return res.status(400).json({ error: 'lat and lon query parameters are required as numbers.' });
+      }
+
+      const activeRiders = await geoService.getNearbyRidersWithLocation(lat, lon, radiusKm);
+      return res.json({ count: activeRiders.length, riders: activeRiders });
+    } catch (err: any) {
+      console.error('[Gateway] Error fetching nearby active riders:', err);
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  // REST endpoint to seed the hot state layer (clear and recreate)
+  app.post('/api/v1/riders/seed', async (req: Request, res: Response) => {
+    try {
+      const riders = req.body.riders;
+      if (!Array.isArray(riders)) {
+        return res.status(400).json({ error: 'Expected riders array in body' });
+      }
+
+      await geoService.clearAllRiderLocations();
+      
+      for (const r of riders) {
+        if (r.id && r.lat !== undefined && r.lon !== undefined) {
+          await geoService.updateRiderLocation(r.id, r.lat, r.lon);
+        }
+      }
+      
+      return res.json({ success: true, count: riders.length });
+    } catch (err: any) {
+      console.error('[Gateway] Error seeding riders:', err);
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  });
   // REST endpoint for the Java Optimization Engine to push assignment notifications
   app.post('/api/v1/notifications/assignment', (req: Request, res: Response) => {
     const { riderId, orderId, payout, pickupLat, pickupLon } = req.body;
