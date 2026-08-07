@@ -15,6 +15,12 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 import org.springframework.transaction.annotation.Transactional;
+import com.meridian.optimization.dto.NearbyRidersResponse;
+import com.meridian.optimization.dto.ActiveRiderDto;
+import org.locationtech.jts.geom.GeometryFactory;
+import org.locationtech.jts.geom.Coordinate;
+import java.util.ArrayList;
+import java.util.UUID;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -47,9 +53,34 @@ public class OptimizationOrchestrator {
 
     @Transactional
     public SolverResult runOptimizationCycle(Double w1, Double w2) {
-        // Fetch eligible riders and orders
-        List<Rider> activeRiders = riderRepository.findByCurrentStatus(RiderStatus.ACTIVE);
+        // Fetch pending orders
         List<Order> pendingOrders = orderRepository.findByStatus(OrderStatus.PENDING);
+
+        // Fetch hot state riders from Node.js Gateway (San Francisco center, 25km radius)
+        List<Rider> activeRiders = new ArrayList<>();
+        try {
+            ResponseEntity<NearbyRidersResponse> response = restTemplate.getForEntity(
+                    "http://localhost:3000/api/v1/riders/nearby-active?lat=37.7749&lon=-122.4194&radius=25.0",
+                    NearbyRidersResponse.class
+            );
+
+            if (response.getStatusCode().is2xxSuccessful() && response.getBody() != null) {
+                GeometryFactory geometryFactory = new GeometryFactory();
+                List<ActiveRiderDto> hotRiders = response.getBody().getRiders();
+                for (ActiveRiderDto dto : hotRiders) {
+                    Rider rider = riderRepository.findById(UUID.fromString(dto.getId())).orElse(null);
+                    if (rider != null && rider.getCurrentStatus() == RiderStatus.ACTIVE) {
+                        // Hydrate the live GPS location from the gateway
+                        rider.setLastKnownLocation(geometryFactory.createPoint(new Coordinate(dto.getLon(), dto.getLat())));
+                        activeRiders.add(rider);
+                    }
+                }
+            }
+        } catch (Exception e) {
+            System.err.println("Failed to fetch hot state riders from gateway: " + e.getMessage());
+            // Fallback to postgres
+            activeRiders = riderRepository.findByCurrentStatus(RiderStatus.ACTIVE);
+        }
 
         if (activeRiders.isEmpty() || pendingOrders.isEmpty()) {
             return new SolverResult(List.of(), 0, true);

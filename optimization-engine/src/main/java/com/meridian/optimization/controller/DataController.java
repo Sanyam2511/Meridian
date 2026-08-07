@@ -9,9 +9,20 @@ import com.meridian.optimization.repository.RiderRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.data.domain.Sort;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.bind.annotation.CrossOrigin;
+import org.springframework.web.client.RestTemplate;
+import org.springframework.transaction.annotation.Transactional;
+import org.locationtech.jts.geom.GeometryFactory;
+import org.locationtech.jts.geom.Coordinate;
+import com.meridian.optimization.dto.SeedRequest;
+import com.meridian.optimization.dto.RiderSeedDto;
+import com.meridian.optimization.entity.OrderStatus;
+import com.meridian.optimization.entity.RiderStatus;
+import java.math.BigDecimal;
+import java.util.ArrayList;
 
 import java.util.List;
 import java.util.stream.Collectors;
@@ -27,12 +38,14 @@ public class DataController {
     private final OrderRepository orderRepository;
     private final AssignmentLogRepository assignmentLogRepository;
     private final ObjectMapper objectMapper;
+    private final RestTemplate restTemplate;
 
-    public DataController(RiderRepository riderRepository, OrderRepository orderRepository, AssignmentLogRepository assignmentLogRepository, ObjectMapper objectMapper) {
+    public DataController(RiderRepository riderRepository, OrderRepository orderRepository, AssignmentLogRepository assignmentLogRepository, ObjectMapper objectMapper, RestTemplate restTemplate) {
         this.riderRepository = riderRepository;
         this.orderRepository = orderRepository;
         this.assignmentLogRepository = assignmentLogRepository;
         this.objectMapper = objectMapper;
+        this.restTemplate = restTemplate;
     }
 
     @GetMapping("/riders")
@@ -96,5 +109,68 @@ public class DataController {
             }
             return map;
         }).collect(Collectors.toList());
+    }
+
+    @PostMapping("/reset")
+    @Transactional
+    public Map<String, Object> resetSimulation() {
+        // 1. Wipe Postgres
+        assignmentLogRepository.deleteAll();
+        orderRepository.deleteAll();
+        riderRepository.deleteAll();
+
+        GeometryFactory gf = new GeometryFactory();
+        List<RiderSeedDto> seedDtos = new ArrayList<>();
+
+        // 2. Seed Riders
+        double[][] riderData = {
+            {37.7749, -122.4194, 45.50}, {37.7833, -122.4167, 142.00},
+            {37.7690, -122.4400, 32.00}, {37.7890, -122.4010, 88.50},
+            {37.7580, -122.4210, 55.00}, {37.7710, -122.4080, 115.00},
+            {37.7950, -122.4350, 64.00}, {37.7620, -122.4310, 128.50}
+        };
+
+        for (double[] rd : riderData) {
+            Rider r = new Rider();
+            r.setCurrentStatus(RiderStatus.ACTIVE);
+            r.setDailyEarningsBalance(BigDecimal.valueOf(rd[2]));
+            r.setLastKnownLocation(gf.createPoint(new Coordinate(rd[1], rd[0])));
+            r = riderRepository.save(r);
+            seedDtos.add(new RiderSeedDto(r.getId().toString(), rd[0], rd[1]));
+        }
+
+        // 3. Seed Orders
+        double[][] orderData = {
+            {37.7614, -122.4241, 37.7700, -122.4100, 18.50},
+            {37.7924, -122.4232, 37.7800, -122.4000, 24.00},
+            {37.8003, -122.4091, 37.7850, -122.4200, 21.50},
+            {37.7509, -122.4181, 37.7600, -122.4350, 15.00},
+            {37.7851, -122.4319, 37.7750, -122.4450, 19.00},
+            {37.7907, -122.4216, 37.7780, -122.4120, 26.50}
+        };
+
+        for (double[] od : orderData) {
+            Order o = new Order();
+            o.setStatus(OrderStatus.PENDING);
+            o.setPickupLocation(gf.createPoint(new Coordinate(od[1], od[0])));
+            o.setDropoffLocation(gf.createPoint(new Coordinate(od[3], od[2])));
+            o.setPayoutAmount(BigDecimal.valueOf(od[4]));
+            orderRepository.save(o);
+        }
+
+        // 4. Sync Gateway Redis
+        try {
+            restTemplate.postForEntity(
+                "http://localhost:3000/api/v1/riders/seed",
+                new SeedRequest(seedDtos),
+                String.class
+            );
+        } catch (Exception e) {
+            System.err.println("Failed to sync seed with gateway: " + e.getMessage());
+        }
+
+        Map<String, Object> result = new HashMap<>();
+        result.put("success", true);
+        return result;
     }
 }
